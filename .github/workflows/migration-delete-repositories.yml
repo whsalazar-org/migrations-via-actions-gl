@@ -1,0 +1,65 @@
+name: Migration (Delete repositories)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  delete-repositories:
+    name: Delete repositories
+    runs-on: ubuntu-latest
+
+    if: github.event_name == 'issue_comment' &&
+      (contains(github.event.issue.labels.*.name, 'github-enterprise-server') ||
+      contains(github.event.issue.labels.*.name, 'gitlab') ||
+      contains(github.event.issue.labels.*.name, 'bitbucket')) &&
+      startsWith(github.event.comment.body, '/delete-repositories')
+
+    defaults:
+      run:
+        working-directory: tools/ghec-importer
+
+    steps:
+      - uses: actions/github-script@v6
+        id: "migration-guid"
+        with:
+          script: |
+            const regex = /\/delete-repositories ([^ ]+)/
+
+            const match = context.payload.comment.body.trim().match(regex)
+
+            if (match) {
+              console.log('migration-guid', match[1])
+              return match[1]
+            }
+
+      - name: Check out repository for ghec-importer
+        uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "14"
+
+      - name: Install dependencies for ghec-importer
+        # Avoid husky from running and failing (.git can't be found) by clearing prepare script
+        # npm set-script needs npm > v7, default is v6 with Node.js 14
+        run: |
+          npm install -g npm@8
+          npm set-script prepare ""
+          npm ci --omit=dev
+
+      - name: Link ghec-importer
+        run: npm link
+
+      - name: Delete repositories
+        run: ghec-importer delete-imported --guid ${{ steps.migration-guid.outputs.result }} --yes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHEC_IMPORTER_ADMIN_TOKEN: ${{ secrets.TARGET_ADMIN_TOKEN }}
+          GHEC_IMPORTER_TARGET_ORGANIZATION: ${{ vars.TARGET_ORGANIZATION }}
+          NODE_OPTIONS: --unhandled-rejections=strict # Terminate process with non-zero exit code if file system (fs) operations fail (https://nodejs.org/api/cli.html#cli_unhandled_rejections_mode)
+

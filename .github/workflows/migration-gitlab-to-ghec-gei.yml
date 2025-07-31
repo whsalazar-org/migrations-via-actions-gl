@@ -1,0 +1,35 @@
+name: GitLab to GHEC [GEI] Migration
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  migrate:
+    if: contains(github.event.issue.labels.*.name, 'migration') &&
+        contains(github.event.issue.labels.*.name, 'gei-gitlab') &&
+        !startsWith(github.event.comment.body, '/delete-repositories')
+    uses: ./.github/workflows/shared-gitlab-to-ghec-gei.yml
+    with:
+      TARGET_ORGANIZATION: ${{ vars.TARGET_ORGANIZATION }}
+      TARGET_HOST: ${{ vars.TARGET_HOST }}
+      RUNNER: ubuntu-latest
+      INSTALL_PREREQS: true
+      SOURCE_ADMIN_USERNAME: ${{ vars.SOURCE_ADMIN_USERNAME }}
+      SOURCE_HOST: ${{ vars.SOURCE_HOST }}
+      GITHUB_STORAGE: ${{ vars.GITHUB_STORAGE }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+      BLOB_STORAGE_CONTAINER: ${{ vars.BLOB_STORAGE_CONTAINER }}
+    secrets:
+      TARGET_ADMIN_TOKEN: ${{ secrets.TARGET_ADMIN_TOKEN }}
+      SOURCE_ADMIN_TOKEN: ${{ secrets.SOURCE_ADMIN_TOKEN }}
+      AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+

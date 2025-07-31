@@ -1,0 +1,127 @@
+name: Shared GitLab Export
+
+on:
+  workflow_call:
+    inputs:
+      migration-guid:
+        default: migration-archive-${{ github.event.issue.number }}-${{ github.run_number}}
+        type: string
+      runner:
+        default: ubuntu-latest
+        type: string
+      setup-ruby:
+        default: true
+        type: boolean
+      GITLAB_USERNAME:
+        required: true
+        type: string
+      GITLAB_API_ENDPOINT:
+        required: true
+        type: string
+    secrets:
+      GITLAB_API_PRIVATE_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  export:
+    name: Export
+    runs-on: ${{ inputs.runner }}
+
+    if: github.event_name == 'issue_comment' &&
+      (startsWith(github.event.comment.body, '/run-dry-run-migration') ||
+      startsWith(github.event.comment.body, '/run-production-migration'))
+
+    env:
+      MIGRATION_GUID: ${{ inputs.migration-guid }}
+      GITLAB_USERNAME: ${{ inputs.GITLAB_USERNAME }}
+      GITLAB_API_PRIVATE_TOKEN: ${{ secrets.GITLAB_API_PRIVATE_TOKEN }}
+      GITLAB_API_ENDPOINT: ${{ inputs.GITLAB_API_ENDPOINT }}
+
+    steps:
+
+      - name: Check out repository for gl-exporter
+        uses: actions/checkout@v4
+
+      - name: Set migration type
+        uses: actions/github-script@v7
+        id: migration-type
+        with:
+          result-encoding: string
+          script: |
+            return context.payload.comment.body.match('dry-run') ? 'Dry-run' : 'Production'
+
+      - name: Update issue with running state
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `:hourglass_flowing_sand: Running **${"${{ steps.migration-type.outputs.result }}".toLowerCase()}** migration. [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})`
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })
+
+      - name: Parse issue body
+        id: parse-issue-body
+        uses: stefanbuck/github-issue-parser@v3
+
+      - run: echo $JSON_STRING
+        env:
+          JSON_STRING: ${{ steps.parse-issue-body.outputs.jsonString }}
+    
+      - name: Write repository list to file
+        uses: actions/github-script@v7
+        env:
+          REPOSITORIES: ${{ steps.parse-issue-body.outputs.issueparser_repositories }}
+        with:
+          script: |
+            const fs = require('fs')
+            fs.writeFileSync('repositories.txt', process.env.REPOSITORIES.trim())
+
+      - if: ${{ inputs.setup-ruby }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.4.1
+
+      - name: Run bootstrap script
+        working-directory: ./tools/gl-exporter
+        run: chmod +x ./script/bootstrap && ./script/bootstrap
+
+      - name: Output gl-exporter version
+        run: gl_exporter --version
+
+      - if: ${{ contains(github.event.comment.body, 'dry-run') }}
+        name: Run dry-run export from GitLab Server
+        run: gl_exporter --ssl-no-verify -f repositories.txt -o ${MIGRATION_GUID}.tar.gz
+
+      - if: ${{ contains(github.event.comment.body, 'production') }}
+        name: Run production export from GitLab Server
+        run: gl_exporter --ssl-no-verify -f repositories.txt -o ${MIGRATION_GUID}.tar.gz --lock-projects=true
+
+      - name: Upload migration archive to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.MIGRATION_GUID }}.tar.gz
+          path: ${{ github.workspace }}/${{ env.MIGRATION_GUID }}.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - if: ${{ failure() }}
+        name: Report failed export
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `:no_entry: **Export failed.** [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})`
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })

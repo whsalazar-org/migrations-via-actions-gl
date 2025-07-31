@@ -1,0 +1,478 @@
+name: Shared GitLab to GHEC [GEI] Migration
+
+on:
+  workflow_call:
+    inputs:
+      TARGET_ORGANIZATION:
+        required: true
+        type: string
+      RUNNER:
+        default: ubuntu-latest
+        type: string
+      INSTALL_PREREQS:
+        default: true
+        type: boolean
+      SOURCE_ADMIN_USERNAME:
+        required: true
+        type: string
+      SOURCE_HOST:
+        required: true
+        type: string
+        description: 'GitLab host url, e.g https://gitlab.example.com'
+      GITHUB_STORAGE:
+        required: false
+        type: string
+      TARGET_HOST:
+        required: false
+        type: string
+        description: 'Optional. for GHEC with Data Residency'
+      AWS_REGION:
+        required: false
+        type: string
+      AZURE_STORAGE_ACCOUNT:
+        required: false
+        type: string
+        description: 'Azure Storage account name for storing migration archives'
+      BLOB_STORAGE_CONTAINER:
+        required: true
+        type: string
+        description: 'Azure Blob Storage container name for storing migration archives or AWS S3 bucket name if using AWS for storage'
+    secrets:
+      TARGET_ADMIN_TOKEN:
+        required: true
+      SOURCE_ADMIN_TOKEN:
+        required: true
+      AZURE_STORAGE_ACCESS_KEY:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ${{ inputs.RUNNER }}
+    if: github.event_name == 'issue_comment' &&
+      (contains(github.event.comment.body, '/run-dry-run-migration') ||
+      contains(github.event.comment.body, '/run-production-migration'))
+
+    outputs:
+      repositories: ${{ steps.json.outputs.repositories }}
+      migration-type: ${{ steps.migration-type.outputs.result }}
+      parsed-issue: ${{ steps.parse-issue-body.outputs.jsonString }}
+
+    steps:
+      - name: Check out scripts
+        uses: actions/checkout@v4
+
+      - name: Parse issue body
+        id: parse-issue-body
+        uses: stefanbuck/github-issue-parser@v3
+
+      - run: echo $JSON_STRING
+        env:
+          JSON_STRING: ${{ steps.parse-issue-body.outputs.jsonString }}
+
+      - name: Set migration type
+        uses: actions/github-script@v7
+        id: migration-type
+        with:
+          result-encoding: string
+          script: |
+            return context.payload.comment.body.match('dry-run') ? 'Dry-run' : 'Production'
+
+      - name: Add migration comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `:hourglass: **${{ steps.migration-type.outputs.result }} migration in progress.** [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})`
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })
+
+      - name: Build matrix
+        uses: actions/github-script@v7
+        id: json
+        with:
+          script: |
+            let repositories = process.env.REPOSITORIES.replace(/\r/g, '').split('\n')
+              .filter(repo => repo.trim() !== '')
+              .map(repo => {
+                // Each entry is in the format "group,repo" where group can contain subgroups
+                const parts = repo.split(',');
+                if (parts.length === 2) {
+                  return {
+                    group: parts[0].trim(),
+                    repo: parts[1].trim()
+                  };
+                } else {
+                  // Fallback in case the format isn't as expected
+                  return {
+                    group: '',
+                    repo: repo.trim()
+                  };
+                }
+              });
+            let json = JSON.stringify(repositories);
+            console.log(json);
+            core.setOutput('repositories', json);
+        env:
+          REPOSITORIES: ${{ steps.parse-issue-body.outputs.issueparser_repositories }}
+
+  migrate:
+    name: Migrate GitLab Repository
+    needs: prepare
+    runs-on: ${{ inputs.RUNNER }}
+    if: success()
+    env:
+      GITHUB_PAT: ${{ secrets.TARGET_ADMIN_TOKEN }}
+      GITHUB_ORG: ${{ inputs.TARGET_ORGANIZATION }}
+      #GITHUB_API_ENDPOINT: #TODO for GHEC with Data Residency
+      GITHUB_GHEC_PAT: ${{ secrets.TARGET_ADMIN_TOKEN }}
+      GITHUB_STORAGE: ${{ inputs.GITHUB_STORAGE }}
+      GITLAB_PAT: ${{ secrets.SOURCE_ADMIN_TOKEN }}
+      GITLAB_API_ENDPOINT: "${{ inputs.SOURCE_HOST }}/api/v4"
+      GITLAB_USERNAME: ${{ inputs.SOURCE_ADMIN_USERNAME }}
+      GITLAB_HOST: ${{ inputs.SOURCE_HOST }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ inputs.AWS_REGION }}
+      AWS_BUCKET: ${{ inputs.BLOB_STORAGE_CONTAINER }}
+      AZURE_STORAGE_ACCOUNT: ${{ inputs.AZURE_STORAGE_ACCOUNT }}
+      AZURE_STORAGE_ACCESS_KEY: ${{ secrets.AZURE_STORAGE_ACCESS_KEY }}
+
+    strategy:
+      matrix: 
+        repository: ${{ fromJson(needs.prepare.outputs.repositories) }}
+      fail-fast: false
+      max-parallel: 10
+
+    # Maximize the timeout to 360 minutes (6 hours)
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set migration archive name
+        id: set-archive-name
+        run: |
+          GROUP="${{ matrix.repository.group }}"
+          REPO_NAME="${{ matrix.repository.repo }}"
+          ARCHIVE_NAME="gitlab-export-${REPO_NAME}-${{ github.event.issue.number }}"
+          echo "archive-name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "repo-name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "group=${GROUP}" >> $GITHUB_OUTPUT
+
+      # Import to GitHub
+      - name: Install GitHub CLI
+        if: ${{ inputs.INSTALL_PREREQS }}
+        run: |
+          if [ -z "$(command -v gh)" ]
+          then
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install -y gh
+          fi
+
+      # Export the GitLab repository
+      - name: Setup Ruby
+        if: ${{ inputs.INSTALL_PREREQS }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2.2'  # Specific version that meets ~> 3.2.1 requirement
+          bundler: '2.4.22'
+          bundler-cache: false  # We'll handle caching manually to ensure correct setup
+          working-directory: './tools/gl-exporter'
+
+      - name: Run gl-exporter bootstrap script
+        working-directory: ./tools/gl-exporter
+        run: |          
+          # Set bundler environment variables to help avoid version conflicts
+          export BUNDLE_GEMFILE=$(pwd)/Gemfile
+          export BUNDLE_PATH=$(pwd)/vendor/bundle
+          export BUNDLE_BIN=$(pwd)/bin
+          
+          # Install dependencies with bundler explicitly
+          gem install bundler:2.4.22
+          bundle config set --local path 'vendor/bundle'
+          bundle install --jobs=4 --retry=3
+          
+          # Make bootstrap script executable and run it
+          chmod +x ./script/bootstrap
+          ./script/bootstrap
+          
+          # Verify installed gems for troubleshooting
+          bundle list
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23'
+
+      - name: Write single repository to file
+        run: |
+          echo "${{ matrix.repository.group }},${{ matrix.repository.repo }}" > single_repository.txt
+
+      - name: Create lock flag based on migration type
+        uses: actions/github-script@v7
+        id: lock-flag
+        with:
+          result-encoding: string
+          script: |
+            return '${{ needs.prepare.outputs.migration-type }}' === 'Production' ? '--lock-projects=true' : ''
+
+      - name: Record job start time
+        id: start-time
+        run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Run GL export
+        env:
+          GITLAB_USERNAME: ${{ env.GITLAB_USERNAME }}
+          GITLAB_API_PRIVATE_TOKEN: ${{ env.GITLAB_PAT }}
+          GITLAB_API_ENDPOINT: ${{ env.GITLAB_API_ENDPOINT }}
+        working-directory: ./tools/gl-exporter
+        run: |
+          # Reset bundle config to ensure clean environment
+          export BUNDLE_GEMFILE=$(pwd)/Gemfile
+          export BUNDLE_PATH=$(pwd)/vendor/bundle
+          
+          # Check if gems are installed properly
+          bundle check || bundle install --jobs=4 --retry=3
+          
+          # Run the exporter through bundler to ensure all dependencies are available
+          bundle exec exe/gl_exporter --ssl-no-verify -f ../../single_repository.txt -o ../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}
+
+      - name: Install GH-GLX Extension
+        working-directory: ./tools/gh-glx-migrator
+        if: ${{ inputs.INSTALL_PREREQS }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go build .
+          gh extension install .
+
+      - name: Import repository
+        id: import-dry-run
+        run: |
+          # Verify the archive file exists
+          ARCHIVE_PATH="${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          echo "Looking for archive file: $ARCHIVE_PATH"
+          ls -la $ARCHIVE_PATH
+          
+          SOURCE_REPO_URL="${{ env.GITLAB_HOST || 'https://gitlab.com' }}/${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
+          gh glx-migrator import-archive \
+            --archive-file-path $ARCHIVE_PATH \
+            --org ${{ inputs.TARGET_ORGANIZATION }} \
+            --source-repo $SOURCE_REPO_URL \
+            --repo-name ${{ steps.set-archive-name.outputs.repo-name }} \
+
+      - name: Record job end time
+        if: always()
+        id: end-time
+        run: echo "end_time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      # Record migration status
+      - name: Write repo migration status
+        if: always()
+        id: write-status
+        run: |
+          # Using individual variables to ensure string interpolation works correctly
+          GROUP="${{ matrix.repository.group }}"
+          REPO="${{ matrix.repository.repo }}"
+          
+          # Calculate migration duration
+          start_time=${{ steps.start-time.outputs.start_time }}
+          end_time=${{ steps.end-time.outputs.end_time }}
+          duration=$(( end_time - start_time ))
+          duration=$(date -u -d @$duration +"%H:%M:%S")
+          
+          # Record outputs
+          echo "repo-name=$REPO" >> "$GITHUB_OUTPUT" 
+          echo "${GROUP}/${REPO}, ${{ job.status }}, $duration" > ${{ steps.set-archive-name.outputs.repo-name }}.txt
+
+      - name: Upload repo migration status
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-status-${{ steps.set-archive-name.outputs.repo-name }}
+          path: ${{ steps.set-archive-name.outputs.repo-name }}.txt
+
+  report-failure:
+    name: Report Failure
+    runs-on: ${{ inputs.RUNNER }}
+    needs: [prepare, migrate]
+    if: failure()
+    steps:
+      - name: Report failed migration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let body = `:no_entry: **${{ needs.prepare.outputs.migration-type }} migration failed.** [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})\n\n`;
+            body += 'Please see the Migration Summary comment for details about which repositories failed.';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+  report-success:
+    name: Report Success
+    runs-on: ${{ inputs.RUNNER }}
+    needs: [prepare, migrate]
+    if: success()
+    steps:
+      - name: Report successful migration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `:tada: **${{ needs.prepare.outputs.migration-type }} migration succeeded.** [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            
+            Please see the Migration Summary comment for details about individual repositories.`
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })
+
+  report-migration-summary:
+    name: Report Migration Summary
+    runs-on: ${{ inputs.RUNNER }}
+    needs: [prepare, migrate]
+    if: always()
+    steps:
+      - name: Download repo migration statuses
+        uses: actions/download-artifact@v4
+        id: download-artifact
+        with:
+          pattern: migration-status-*
+          path: migration-status
+          merge-multiple: true
+
+      - name: Create migration summary
+        id: create-migration-summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            let repoDetails = [];
+            const dir = 'migration-status';
+            let successCount = 0;
+            let failureCount = 0;
+
+            try {
+              fs.readdirSync(`./${dir}`).forEach(file => {
+                if (path.extname(file) === '.txt') {
+                  const content = fs.readFileSync(`${dir}/${file}`, 'utf-8');
+                  // Content format is "group/repo, status, duration"
+                  const parts = content.split(',');
+                  
+                  // Ensure we have at least 2 parts (repo and status)
+                  if (parts.length >= 2) {
+                    const repo = parts[0].trim();
+                    const status = parts[1].trim();
+                    // Duration might not be present in older status files
+                    const duration = parts.length > 2 ? parts[2].trim() : 'N/A';
+                    
+                    console.log(`Repo: ${repo}, Status: ${status}, Duration: ${duration}`);
+                    repoDetails.push([repo, status, duration]);
+                    
+                    if (status === 'success') {
+                      successCount++;
+                    } else {
+                      failureCount++;
+                    }
+                  }
+                }
+              });
+            } catch (error) {
+              console.error(`Error reading status files: ${error}`);
+            }
+
+            // Create the step summary
+            if (repoDetails.length > 0) {
+              let tableRows = repoDetails.map(([repo, status, duration]) => [repo, status, duration]);
+              await core.summary
+                .addHeading('Migration Summary')
+                .addTable([
+                  [{data: 'Repository Name', header: true}, {data: 'Status', header: true}, {data: 'Duration', header: true}],
+                  ...tableRows
+                ])
+                .write();
+              
+              // Return summary stats
+              return {
+                total: repoDetails.length,
+                success: successCount,
+                failed: failureCount,
+                details: repoDetails
+              };
+            }
+            
+            return { total: 0, success: 0, failed: 0, details: [] };
+
+      - name: Add summary comment to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = ${{ toJSON(steps.create-migration-summary.outputs.result || '{}') }};
+            let summaryData;
+            
+            try {
+              summaryData = typeof summary === 'string' ? JSON.parse(summary) : summary;
+            } catch (error) {
+              console.error('Error parsing summary data:', error);
+              summaryData = { total: 0, success: 0, failed: 0, details: [] };
+            }
+            
+            // Build a comment with the summary table
+            const migrationType = '${{ needs.prepare.outputs.migration-type }}';
+            let icon = ':information_source:';
+            
+            // Choose icon based on migration results
+            if (summaryData.failed === 0 && summaryData.total > 0) {
+              icon = ':tada:';
+            } else if (summaryData.failed > 0) {
+              icon = ':warning:';
+            }
+            
+            let body = `${icon} **${migrationType} Migration Summary** [View workflow run for details](${context.payload.repository.html_url}/actions/runs/${context.runId})\n\n`;
+            body += `Total: ${summaryData.total}, Success: ${summaryData.success}, Failed: ${summaryData.failed}\n\n`;
+            
+            if (summaryData.details && summaryData.details.length > 0) {
+              // Create a markdown table
+              body += '| Repository | Status | Duration |\n';
+              body += '|------------|--------|----------|\n';
+              
+              summaryData.details.forEach(detail => {
+                // Use emoji for better visual status
+                const statusEmoji = detail[1] === 'success' ? '✅' : '❌';
+                body += `| ${detail[0]} | ${statusEmoji} | ${detail[2]} |\n`;
+              });
+              
+              // Add note about deletion for dry-run
+              if (migrationType === 'Dry-run' && summaryData.success > 0) {
+                body += '\n\nTo delete the repositories created during this dry-run, add a comment with:\n```\n/delete-repositories\n```';
+              }
+            }
+            
+            // Post the comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });

@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.envrc
+.direnv
+Dockerfile*
+docker-compose.*
+script/cibuild*
+.dockerignore
+data/

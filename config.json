@@ -1,0 +1,167 @@
+{
+    "ado-to-ghec-gei" : {
+        "issue_templates": [
+            "config.yml",
+            "azure-devops-gei-migration.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-prepare.yml",
+            "migration-azure-devops-gei.yml",
+            "migration-delete-gei-repositories.yml",
+            "shared-azure-devops-gei.yml"
+        ],
+        "tools": [
+        ]
+    },
+    "bbs-to-ghec-gei": {
+        "issue_templates": [
+            "config.yml",
+            "bitbucket-gei-migration.yml",
+            "bitbucket-migration.yml"
+            
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-prepare.yml",
+            "migration-bitbucket-gei.yml",
+            "migration-delete-gei-repositories.yml",
+            "shared-bitbucket-gei.yml"
+        ],
+        "tools": [
+        ]
+    },
+    "bbs-to-ghec-eci": {
+        "issue_templates": [
+            "config.yml",
+            "bitbucket-migration.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-delete-repositories.yml",
+            "migration-bitbucket.yml",
+            "migration-prepare.yml",
+            "shared-github-enterprise-cloud-import.yml",
+            "shared-bitbucket-export.yml"
+        ],
+        "tools": [
+            "bbs-exporter",
+            "github-script",
+            "ghec-importer"
+        ]
+    },
+    "bbs-to-ghes": {
+        "issue_templates": [
+            "config.yml",
+            "bitbucket-ghes-migration.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-delete-ghes-repositories.yml",
+            "migration-bitbucket-ghes.yml",
+            "migration-prepare.yml",
+            "shared-github-enterprise-server-import.yml",
+            "shared-bitbucket-export.yml"
+        ],
+        "tools": [
+            "bbs-exporter",
+            "github-script"
+        ]
+    },
+    "gitlab-to-ghec-eci": {
+        "issue_templates": [
+            "gitlab-migration.yml",
+            "config.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-gitlab.yml",
+            "migration-delete-repositories.yml",
+            "shared-github-enterprise-cloud-import.yml",
+            "shared-gitlab-export.yml",
+            "migration-prepare.yml"
+        ],
+        "tools": [
+            "gl-exporter",
+            "ghec-importer",
+            "github-script"
+        ]
+    },
+    "ghes-to-ghec-eci": {
+        "issue_templates": [
+            "config.yml",
+            "github-enterprise-server-migration.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-delete-repositories.yml",
+            "shared-github-enterprise-server-export.yml",
+            "shared-github-enterprise-cloud-import.yml",
+            "migration-github-enterprise-server.yml",
+            "migration-prepare.yml"
+        ],
+        "tools": [
+            "ghec-importer",
+            "github-script"
+        ]
+    },
+    "ghes-to-ghec-gei": {
+        "issue_templates": [
+            "config.yml",
+            "github-org-migration-gei.yml",
+            "github-repos-migration-gei.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-prepare.yml",
+            "migration-delete-gei-repositories.yml",            
+            "migration-github-repos-gei.yml",
+            "migration-github-org-gei.yml",
+            "prepare-org-migration.yml",
+            "shared-github-enterprise-cloud-gei.yml",
+            "shared-github-org-gei.yml"
+            
+        ],
+        "tools": [
+            "ghec-importer",
+            "github-script"
+        ]
+    },
+    "ghec-to-ghec-gei": {
+        "issue_templates": [
+            "config.yml",
+            "github-org-migration-gei.yml",
+            "github-repos-migration-gei.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-prepare.yml",
+            "migration-delete-gei-repositories.yml",            
+            "migration-github-repos-gei.yml",
+            "migration-github-org-gei.yml",
+            "prepare-org-migration.yml",
+            "shared-github-org-gei.yml",
+            "shared-github-enterprise-cloud-gei.yml"
+            
+        ],
+        "tools": [
+        ]
+    },
+    "ghec-to-ghes": {
+        "issue_templates": [
+            "config.yml",
+            "github-enterprise-cloud-migration.yml"
+        ],
+        "workflows": [
+            "bootstrap.yml",
+            "migration-delete-ghes-repositories.yml",
+            "migration-github-enterprise-cloud.yml",
+            "migration-prepare.yml",
+            "shared-github-enterprise-server-import.yml",
+            "shared-github-enterprise-cloud-export.yml"
+        ],
+        "tools": [
+            "github-script"
+        ]
+    }
+}

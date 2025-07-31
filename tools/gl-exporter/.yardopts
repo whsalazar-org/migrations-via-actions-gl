@@ -1,0 +1,1 @@
+ lib/**/*.rb --markup markdown --markup-provider redcarpet - docs/features.md

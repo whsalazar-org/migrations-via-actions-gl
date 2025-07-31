@@ -1,0 +1,138 @@
+# Parses migration issue and creates a comment with next step
+#
+# Required variables:
+#
+#   - TARGET_ORGANIZATION:
+#     The organization on GitHub.com to import into (needs to have ECI feature flag enabled)
+
+name: Repos Migration (Prepare)
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare Repos Migration
+    runs-on: ubuntu-latest
+
+    if: github.event_name == 'issues' &&
+      (github.event.action == 'opened' || github.event.action == 'edited') &&
+      contains(github.event.issue.labels.*.name, 'migration') &&
+      !contains(github.event.issue.labels.*.name, 'gei-org')
+
+    steps:
+      - name: Check out scripts
+        uses: actions/checkout@v4
+
+      - name: Parse issue body
+        id: parse-issue-body
+        uses: stefanbuck/github-issue-parser@v3
+
+      - run: echo $JSON_STRING
+        env:
+          JSON_STRING: ${{ steps.parse-issue-body.outputs.jsonString }}
+        
+      - name: Post prepare message
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // if process.env.VISIBILITY is 'None', set it to 'private'
+            let visibility
+            if (process.env.VISIBILITY == 'None') {
+              visibility = 'Private'
+            } else {
+              visibility = process.env.VISIBILITY
+            }
+            
+            const numberOfRepositories = process.env.REPOSITORIES.trim().split('\n').length
+
+            let commentBody
+            commentBody = `👋 Thank you for opening this migration issue.
+          
+            The following **${numberOfRepositories} repositories** have been parsed from your issue body:
+          
+            \`\`\`
+            ${process.env.REPOSITORIES}
+            \`\`\`
+          
+            The **target organization** is set to be: **\`${ process.env.TARGET_ORG }\`**
+            The **target repository visibility** is set to be: **\`${ visibility }\`**
+          
+            <details>
+              <summary><b>Troubleshooting</b></summary>
+          
+            If the parsed repositories are not matching the repositories listed in your issue body, you can edit the issue body and make sure it's correct. List your repositories in a code block as this one:
+          
+            \`\`\`
+            https://source.example.com/your-org/your-repository-1
+            https://source.example.com/your-org/your-repository-2
+            \`\`\`
+            </details>
+          
+            ## Run the migration
+          
+            Add a comment to this issue with one of the following two commands in order to run a migration:
+          
+            **Dry-run**
+          
+            We recommend to do a "dry-run" migration first which **will not lock your source repository** and therefore does not block your users from continuing to work on the repository.
+          
+            \`\`\`
+            /run-dry-run-migration
+            \`\`\`
+          
+            **Production**
+          
+            After you have verified your "dry-run" migration and after you have announced the production migration to your users, create a comment with the following command to start the production migration. It **will lock your source repository** and make it unaccessible for your users.
+          
+            \`\`\`
+            /run-production-migration
+            \`\`\`
+            `
+
+            // For repositories migrating with GEI, we need to ensure we don't exceed 256 Actions jobs since we are using a matrix
+            if (numberOfRepositories > 252) {
+              // get labels, need to check to see if 'gei' is in the labels
+              const labelsResponse = await github.rest.issues.listLabelsOnIssue({
+                issue_number: ${{ github.event.issue.number }},
+                owner: '${{ github.REPOSITORY_OWNER }}',
+                repo: '${{ github.event.repository.name }}'
+              });
+              const labels = labelsResponse.data.map(label => label.name);
+              if (labels.some(label => label.includes('gei'))) {
+                commentBody += `:x: :x: :x: **Action Required**
+                Due to [Actions limitations](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow#using-a-matrix-strategy), the maximum number of repositories that can be migrated in a single issue is **252**. Please edit the issue body to reduce the number of repositories to be migrated in a single issue. _There are ${numberOfRepositories} repositories in this issue_.
+                :x: :x: :x:
+                `
+              }
+            }
+                        
+            await github.rest.issues.createComment({
+                issue_number: ${{ github.event.issue.number }},
+                owner: '${{ github.REPOSITORY_OWNER }}',
+                repo: '${{ github.event.repository.name }}',
+                body: commentBody
+            })
+        env:
+          REPOSITORIES: ${{ steps.parse-issue-body.outputs.issueparser_repositories }}
+          VISIBILITY: ${{ steps.parse-issue-body.outputs.issueparser_target_repository_visibility }}
+          TARGET_ORG: ${{ vars.TARGET_ORGANIZATION }}
+
+      - name: Post failure message
+        if: ${{ failure() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let commentBody
+            commentBody = `😢 The issue body could not be parsed. Please edit the issue body or open a new issue using an issue template.`
+            await github.rest.issues.createComment({
+              issue_number: ${{ github.event.issue.number }},
+              owner: '${{ github.REPOSITORY_OWNER }}',
+              repo: '${{ github.event.repository.name }}',
+              body: commentBody
+            })

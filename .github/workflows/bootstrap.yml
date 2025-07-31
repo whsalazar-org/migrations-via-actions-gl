@@ -1,0 +1,52 @@
+# This workflow automatically bootstraps the self serve migration process,
+# when it parent repository is created. Alternatively it may be manually
+# dispatched to execute the bootstrap process.
+
+name: Bootstrap self serve migration
+
+on:
+  create:
+  workflow_dispatch:
+
+permissions:
+  contents: none
+  issues: write
+  actions: write
+
+jobs:
+  bootstrap-self-serve:
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/github-script@v7
+        name: create labels
+        with:
+          script: |
+            const labels = [
+              'gitlab',
+              'migration',
+            ];
+
+            for (const label of labels) {
+              github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                description: 'Label used by Issue Ops workflow.'
+              });
+            }
+
+      - uses: actions/github-script@v7
+        name: disable workflow
+        with:
+          script: |
+            let parts = process.env.GITHUB_WORKFLOW_REF.split("@")[0].split("/");
+            let filename = parts.pop();
+
+            github.rest.actions.disableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: filename
+            });
