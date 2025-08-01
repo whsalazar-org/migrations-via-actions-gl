@@ -132,6 +132,11 @@ jobs:
     needs: prepare
     runs-on: ${{ inputs.RUNNER }}
     if: success()
+    container:
+      image: ${{ vars.GL_EXPORTER_IMAGE }}
+      credentials:
+        username: ${{ vars.DOCKER_REGISTRY_USERNAME }}
+        password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
     env:
       GITHUB_PAT: ${{ secrets.TARGET_ADMIN_TOKEN }}
       GITHUB_ORG: ${{ inputs.TARGET_ORGANIZATION }}
@@ -161,6 +166,71 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate migration prerequisites
+        id: validate-prereqs
+        run: |
+          set -e  # Exit immediately if any command fails
+          
+          echo "::group::Validating environment variables and secrets"
+          VALIDATION_ERRORS=0
+          
+          # Check required environment variables
+          if [ -z "${{ env.GITHUB_PAT }}" ]; then
+            echo "::error::GITHUB_PAT (TARGET_ADMIN_TOKEN) is not set"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          fi
+          
+          if [ -z "${{ env.GITLAB_PAT }}" ]; then
+            echo "::error::GITLAB_PAT (SOURCE_ADMIN_TOKEN) is not set"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          fi
+          
+          if [ -z "${{ env.GITLAB_API_ENDPOINT }}" ]; then
+            echo "::error::GITLAB_API_ENDPOINT is not set"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          fi
+          
+          if [ -z "${{ env.GITLAB_USERNAME }}" ]; then
+            echo "::error::GITLAB_USERNAME is not set"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          fi
+          
+          # Check storage configuration
+          STORAGE_CONFIGURED=0
+          if [ -n "${{ env.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ env.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "AWS storage configuration detected"
+            STORAGE_CONFIGURED=1
+          fi
+          
+          if [ -n "${{ env.AZURE_STORAGE_ACCOUNT }}" ] && [ -n "${{ env.AZURE_STORAGE_ACCESS_KEY }}" ]; then
+            echo "Azure storage configuration detected"
+            STORAGE_CONFIGURED=1
+          fi
+          
+          if [ $STORAGE_CONFIGURED -eq 0 ]; then
+            echo "::error::No storage backend configured (AWS or Azure required)"
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          fi
+          
+          # Check container image variables if using custom image
+          if [ -n "${{ vars.GL_EXPORTER_IMAGE }}" ]; then
+            echo "Custom container image configured: ${{ vars.GL_EXPORTER_IMAGE }}"
+            if [ -z "${{ vars.DOCKER_REGISTRY_USERNAME }}" ]; then
+              echo "::warning::DOCKER_REGISTRY_USERNAME not set - this may be required for private registries"
+            fi
+          else
+            echo "::warning::GL_EXPORTER_IMAGE variable not set - using default container"
+          fi
+          
+          echo "::endgroup::"
+          
+          if [ $VALIDATION_ERRORS -gt 0 ]; then
+            echo "::error::Validation failed with $VALIDATION_ERRORS error(s). Please check your configuration."
+            exit 1
+          fi
+          
+          echo "::notice::All prerequisites validated successfully"
+
       - name: Set migration archive name
         id: set-archive-name
         run: |
@@ -171,51 +241,103 @@ jobs:
           echo "repo-name=${REPO_NAME}" >> $GITHUB_OUTPUT
           echo "group=${GROUP}" >> $GITHUB_OUTPUT
 
-      # Import to GitHub
-      - name: Install GitHub CLI
+      # Install prerequisites in container
+      # NOTE: These installation steps can be removed if the custom container image
+      # already has GitHub CLI and Go pre-installed and properly configured
+      - name: Install prerequisites
         if: ${{ inputs.INSTALL_PREREQS }}
         run: |
-          if [ -z "$(command -v gh)" ]
-          then
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            sudo apt update
-            sudo apt install -y gh
+          set -e  # Exit immediately if any command fails
+          
+          echo "::group::Updating package lists"
+          if ! apt-get update; then
+            echo "::error::Failed to update package lists"
+            exit 1
           fi
+          echo "::endgroup::"
+          
+          echo "::group::Installing basic tools"
+          if ! apt-get install -y curl wget gnupg lsb-release software-properties-common; then
+            echo "::error::Failed to install basic tools"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Installing GitHub CLI"
+          # Install GitHub CLI (can be removed if pre-installed in container image)
+          if [ -z "$(command -v gh)" ]; then
+            echo "GitHub CLI not found, installing..."
+            if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg; then
+              echo "::error::Failed to download GitHub CLI keyring"
+              exit 1
+            fi
+            
+            if ! chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; then
+              echo "::error::Failed to set permissions on GitHub CLI keyring"
+              exit 1
+            fi
+            
+            if ! echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null; then
+              echo "::error::Failed to add GitHub CLI repository"
+              exit 1
+            fi
+            
+            if ! apt-get update; then
+              echo "::error::Failed to update package lists after adding GitHub CLI repository"
+              exit 1
+            fi
+            
+            if ! apt-get install -y gh; then
+              echo "::error::Failed to install GitHub CLI"
+              exit 1
+            fi
+            
+            echo "GitHub CLI installed successfully"
+          else
+            echo "GitHub CLI already installed: $(gh --version)"
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Installing development tools"
+          # Install other required packages including Go (can be removed if pre-installed in container image)
+          if ! apt-get install -y build-essential git cmake ca-certificates golang-go; then
+            echo "::error::Failed to install development tools (build-essential, git, cmake, ca-certificates, golang-go)"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::notice::All prerequisites installed successfully"
 
-      # Export the GitLab repository
-      - name: Setup Ruby
+      # NOTE: This Go environment setup step can be removed if the custom container image
+      # already has Go properly configured with correct GOPATH and PATH settings
+      - name: Setup Go environment
         if: ${{ inputs.INSTALL_PREREQS }}
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2.2'  # Specific version that meets ~> 3.2.1 requirement
-          bundler: '2.4.22'
-          bundler-cache: false  # We'll handle caching manually to ensure correct setup
-          working-directory: './tools/gl-exporter'
-
-      - name: Run gl-exporter bootstrap script
-        working-directory: ./tools/gl-exporter
-        run: |          
-          # Set bundler environment variables to help avoid version conflicts
-          export BUNDLE_GEMFILE=$(pwd)/Gemfile
-          export BUNDLE_PATH=$(pwd)/vendor/bundle
-          export BUNDLE_BIN=$(pwd)/bin
+        run: |
+          set -e  # Exit immediately if any command fails
           
-          # Install dependencies with bundler explicitly
-          gem install bundler:2.4.22
-          bundle config set --local path 'vendor/bundle'
-          bundle install --jobs=4 --retry=3
+          echo "::group::Verifying Go installation"
+          if ! go version; then
+            echo "::error::Go is not installed or not in PATH"
+            exit 1
+          fi
+          echo "::endgroup::"
           
-          # Make bootstrap script executable and run it
-          chmod +x ./script/bootstrap
-          ./script/bootstrap
+          echo "::group::Setting up Go environment"
+          # Set Go environment variables
+          export GOPATH=/root/go
+          export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
           
-          # Verify installed gems for troubleshooting
-          bundle list
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '^1.23'
+          # Persist environment variables for subsequent steps
+          echo "GOPATH=/root/go" >> $GITHUB_ENV
+          echo "/usr/local/go/bin:/root/go/bin" >> $GITHUB_PATH
+          
+          # Verify environment setup
+          echo "Go version: $(go version)"
+          echo "GOPATH: $GOPATH"
+          echo "PATH: $PATH"
+          echo "::endgroup::"
+          
+          echo "::notice::Go environment configured successfully"
 
       - name: Write single repository to file
         run: |
@@ -234,45 +356,221 @@ jobs:
         run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: Run GL export
+        id: gl-export
         env:
           GITLAB_USERNAME: ${{ env.GITLAB_USERNAME }}
           GITLAB_API_PRIVATE_TOKEN: ${{ env.GITLAB_PAT }}
           GITLAB_API_ENDPOINT: ${{ env.GITLAB_API_ENDPOINT }}
         working-directory: ./tools/gl-exporter
         run: |
-          # Reset bundle config to ensure clean environment
-          export BUNDLE_GEMFILE=$(pwd)/Gemfile
-          export BUNDLE_PATH=$(pwd)/vendor/bundle
+          set -e  # Exit immediately if any command fails
           
-          # Check if gems are installed properly
-          bundle check || bundle install --jobs=4 --retry=3
+          echo "::group::Preparing GitLab export"
+          echo "GitLab API Endpoint: $GITLAB_API_ENDPOINT"
+          echo "GitLab Username: $GITLAB_USERNAME"
+          echo "Archive name: ${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          echo "Repository: ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
+          echo "Lock flag: ${{ steps.lock-flag.outputs.result }}"
+          echo "::endgroup::"
           
-          # Run the exporter through bundler to ensure all dependencies are available
-          bundle exec exe/gl_exporter --ssl-no-verify -f ../../single_repository.txt -o ../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}
+          echo "::group::Validating environment variables"
+          if [ -z "$GITLAB_API_PRIVATE_TOKEN" ]; then
+            echo "::error::GITLAB_API_PRIVATE_TOKEN is not set"
+            exit 1
+          fi
+          
+          if [ -z "$GITLAB_API_ENDPOINT" ]; then
+            echo "::error::GITLAB_API_ENDPOINT is not set"
+            exit 1
+          fi
+          
+          if [ -z "$GITLAB_USERNAME" ]; then
+            echo "::error::GITLAB_USERNAME is not set"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Running GitLab exporter"
+          # Run the exporter directly with error handling
+          if ! exe/gl_exporter --ssl-no-verify -f ../../single_repository.txt -o ../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}; then
+            echo "::error::GitLab export failed for repository ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
+            echo "export_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Verifying export archive"
+          ARCHIVE_PATH="../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          if [ ! -f "$ARCHIVE_PATH" ]; then
+            echo "::error::Export archive was not created: $ARCHIVE_PATH"
+            echo "export_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Check archive size (should be > 0 bytes)
+          ARCHIVE_SIZE=$(stat -c%s "$ARCHIVE_PATH" 2>/dev/null || echo "0")
+          if [ "$ARCHIVE_SIZE" -eq 0 ]; then
+            echo "::error::Export archive is empty: $ARCHIVE_PATH"
+            echo "export_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Archive created successfully: $ARCHIVE_PATH (${ARCHIVE_SIZE} bytes)"
+          echo "export_status=success" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          
+          echo "::notice::GitLab export completed successfully"
 
+      # NOTE: This GH-GLX extension installation step can be removed if the custom container image
+      # already has the gh-glx-migrator extension pre-built and installed
       - name: Install GH-GLX Extension
+        id: install-extension
         working-directory: ./tools/gh-glx-migrator
         if: ${{ inputs.INSTALL_PREREQS }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          go build .
-          gh extension install .
+          set -e  # Exit immediately if any command fails
+          
+          echo "::group::Validating GitHub token"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error::GITHUB_TOKEN is not set"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Configuring GitHub CLI authentication"
+          # Configure GitHub CLI authentication
+          if ! echo "$GITHUB_TOKEN" | gh auth login --with-token; then
+            echo "::error::Failed to authenticate with GitHub CLI"
+            exit 1
+          fi
+          
+          # Verify authentication
+          if ! gh auth status; then
+            echo "::error::GitHub CLI authentication verification failed"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Building GH-GLX extension"
+          # Build the extension
+          if ! go build .; then
+            echo "::error::Failed to build gh-glx-migrator extension"
+            exit 1
+          fi
+          
+          # Verify the binary was created
+          if [ ! -f "./gh-glx-migrator" ]; then
+            echo "::error::gh-glx-migrator binary was not created"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Installing GH-GLX extension"
+          # Install the extension
+          if ! gh extension install .; then
+            echo "::error::Failed to install gh-glx-migrator extension"
+            exit 1
+          fi
+          
+          # Verify installation
+          if ! gh glx-migrator --help > /dev/null 2>&1; then
+            echo "::error::gh-glx-migrator extension is not working properly"
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::notice::GH-GLX extension installed and verified successfully"
 
       - name: Import repository
-        id: import-dry-run
+        id: import-repository
         run: |
+          set -e  # Exit immediately if any command fails
+          
+          echo "::group::Validating prerequisites"
           # Verify the archive file exists
           ARCHIVE_PATH="${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
           echo "Looking for archive file: $ARCHIVE_PATH"
-          ls -la $ARCHIVE_PATH
           
+          if [ ! -f "$ARCHIVE_PATH" ]; then
+            echo "::error::Archive file not found: $ARCHIVE_PATH"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Check if GitLab export was successful
+          if [ "${{ steps.gl-export.outputs.export_status }}" = "failed" ]; then
+            echo "::error::Cannot proceed with import - GitLab export failed"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # List archive file details
+          ls -la $ARCHIVE_PATH
+          echo "::endgroup::"
+          
+          echo "::group::Preparing import parameters"
           SOURCE_REPO_URL="${{ env.GITLAB_HOST || 'https://gitlab.com' }}/${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
-          gh glx-migrator import-archive \
-            --archive-file-path $ARCHIVE_PATH \
-            --org ${{ inputs.TARGET_ORGANIZATION }} \
-            --source-repo $SOURCE_REPO_URL \
-            --repo-name ${{ steps.set-archive-name.outputs.repo-name }} \
+          TARGET_ORG="${{ inputs.TARGET_ORGANIZATION }}"
+          REPO_NAME="${{ steps.set-archive-name.outputs.repo-name }}"
+          
+          echo "Source repository URL: $SOURCE_REPO_URL"
+          echo "Target organization: $TARGET_ORG"
+          echo "Target repository name: $REPO_NAME"
+          echo "Archive file: $ARCHIVE_PATH"
+          echo "::endgroup::"
+          
+          echo "::group::Validating GitHub CLI and extension"
+          # Verify GitHub CLI is available and authenticated
+          if ! command -v gh > /dev/null 2>&1; then
+            echo "::error::GitHub CLI is not available"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Verify gh-glx-migrator extension is available
+          if ! gh glx-migrator --help > /dev/null 2>&1; then
+            echo "::error::gh-glx-migrator extension is not available"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Check GitHub authentication
+          if ! gh auth status > /dev/null 2>&1; then
+            echo "::error::GitHub CLI is not authenticated"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Importing repository to GitHub"
+          # Run the import with comprehensive error handling
+          if ! gh glx-migrator import-archive \
+            --archive-file-path "$ARCHIVE_PATH" \
+            --org "$TARGET_ORG" \
+            --source-repo "$SOURCE_REPO_URL" \
+            --repo-name "$REPO_NAME"; then
+            echo "::error::Repository import failed for ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
+            echo "import_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Verifying import success"
+          # Additional verification that the repository was created
+          sleep 5  # Give GitHub a moment to process
+          
+          if ! gh repo view "$TARGET_ORG/$REPO_NAME" > /dev/null 2>&1; then
+            echo "::warning::Repository may not be immediately visible, this could be normal for large repositories"
+          else
+            echo "Repository successfully created and visible: $TARGET_ORG/$REPO_NAME"
+          fi
+          
+          echo "import_status=success" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          
+          echo "::notice::Repository import completed successfully"
 
       - name: Record job end time
         if: always()
@@ -284,6 +582,9 @@ jobs:
         if: always()
         id: write-status
         run: |
+          set -e  # Exit immediately if any command fails
+          
+          echo "::group::Collecting migration status"
           # Using individual variables to ensure string interpolation works correctly
           GROUP="${{ matrix.repository.group }}"
           REPO="${{ matrix.repository.repo }}"
@@ -294,9 +595,41 @@ jobs:
           duration=$(( end_time - start_time ))
           duration=$(date -u -d @$duration +"%H:%M:%S")
           
+          # Determine overall migration status
+          EXPORT_STATUS="${{ steps.gl-export.outputs.export_status || 'unknown' }}"
+          IMPORT_STATUS="${{ steps.import-repository.outputs.import_status || 'unknown' }}"
+          JOB_STATUS="${{ job.status }}"
+          
+          echo "Export status: $EXPORT_STATUS"
+          echo "Import status: $IMPORT_STATUS"
+          echo "Job status: $JOB_STATUS"
+          echo "Duration: $duration"
+          echo "::endgroup::"
+          
+          echo "::group::Writing status file"
           # Record outputs
-          echo "repo-name=$REPO" >> "$GITHUB_OUTPUT" 
-          echo "${GROUP}/${REPO}, ${{ job.status }}, $duration" > ${{ steps.set-archive-name.outputs.repo-name }}.txt
+          echo "repo-name=$REPO" >> "$GITHUB_OUTPUT"
+          
+          # Create detailed status information
+          STATUS_FILE="${{ steps.set-archive-name.outputs.repo-name }}.txt"
+          echo "${GROUP}/${REPO}, ${JOB_STATUS}, ${duration}, export:${EXPORT_STATUS}, import:${IMPORT_STATUS}" > "$STATUS_FILE"
+          
+          # Verify status file was created
+          if [ ! -f "$STATUS_FILE" ]; then
+            echo "::error::Failed to create status file: $STATUS_FILE"
+            exit 1
+          fi
+          
+          echo "Status file created: $STATUS_FILE"
+          cat "$STATUS_FILE"
+          echo "::endgroup::"
+          
+          # Log summary to job output
+          if [ "$JOB_STATUS" = "success" ]; then
+            echo "::notice::Migration completed successfully for ${GROUP}/${REPO} in $duration"
+          else
+            echo "::error::Migration failed for ${GROUP}/${REPO} after $duration - Export: $EXPORT_STATUS, Import: $IMPORT_STATUS"
+          fi
 
       - name: Upload repo migration status
         uses: actions/upload-artifact@v4
@@ -304,6 +637,31 @@ jobs:
         with:
           name: migration-status-${{ steps.set-archive-name.outputs.repo-name }}
           path: ${{ steps.set-archive-name.outputs.repo-name }}.txt
+
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          echo "::group::Migration failure cleanup"
+          
+          # Log detailed failure information
+          echo "::error::Migration failed for repository: ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
+          echo "Export status: ${{ steps.gl-export.outputs.export_status || 'not-started' }}"
+          echo "Import status: ${{ steps.import-repository.outputs.import_status || 'not-started' }}"
+          
+          # Clean up any temporary files
+          ARCHIVE_PATH="${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          if [ -f "$ARCHIVE_PATH" ]; then
+            echo "Cleaning up archive file: $ARCHIVE_PATH"
+            rm -f "$ARCHIVE_PATH"
+          fi
+          
+          # Log repository file for debugging
+          if [ -f "single_repository.txt" ]; then
+            echo "Repository file contents:"
+            cat single_repository.txt
+          fi
+          
+          echo "::endgroup::"
 
   report-failure:
     name: Report Failure
@@ -377,18 +735,35 @@ jobs:
               fs.readdirSync(`./${dir}`).forEach(file => {
                 if (path.extname(file) === '.txt') {
                   const content = fs.readFileSync(`${dir}/${file}`, 'utf-8');
-                  // Content format is "group/repo, status, duration"
-                  const parts = content.split(',');
+                  // Enhanced content format is "group/repo, status, duration, export:status, import:status"
+                  const parts = content.split(',').map(p => p.trim());
                   
                   // Ensure we have at least 2 parts (repo and status)
                   if (parts.length >= 2) {
-                    const repo = parts[0].trim();
-                    const status = parts[1].trim();
-                    // Duration might not be present in older status files
-                    const duration = parts.length > 2 ? parts[2].trim() : 'N/A';
+                    const repo = parts[0];
+                    const status = parts[1];
+                    const duration = parts.length > 2 ? parts[2] : 'N/A';
                     
-                    console.log(`Repo: ${repo}, Status: ${status}, Duration: ${duration}`);
-                    repoDetails.push([repo, status, duration]);
+                    // Extract detailed status information if available
+                    let exportStatus = 'unknown';
+                    let importStatus = 'unknown';
+                    
+                    for (let i = 3; i < parts.length; i++) {
+                      if (parts[i].startsWith('export:')) {
+                        exportStatus = parts[i].substring(7);
+                      } else if (parts[i].startsWith('import:')) {
+                        importStatus = parts[i].substring(7);
+                      }
+                    }
+                    
+                    console.log(`Repo: ${repo}, Status: ${status}, Duration: ${duration}, Export: ${exportStatus}, Import: ${importStatus}`);
+                    repoDetails.push({
+                      repo: repo,
+                      status: status,
+                      duration: duration,
+                      exportStatus: exportStatus,
+                      importStatus: importStatus
+                    });
                     
                     if (status === 'success') {
                       successCount++;
@@ -404,11 +779,18 @@ jobs:
 
             // Create the step summary
             if (repoDetails.length > 0) {
-              let tableRows = repoDetails.map(([repo, status, duration]) => [repo, status, duration]);
+              let tableRows = repoDetails.map(detail => [
+                detail.repo, 
+                detail.status, 
+                detail.duration, 
+                detail.exportStatus, 
+                detail.importStatus
+              ]);
+              
               await core.summary
                 .addHeading('Migration Summary')
                 .addTable([
-                  [{data: 'Repository Name', header: true}, {data: 'Status', header: true}, {data: 'Duration', header: true}],
+                  [{data: 'Repository', header: true}, {data: 'Status', header: true}, {data: 'Duration', header: true}, {data: 'Export', header: true}, {data: 'Import', header: true}],
                   ...tableRows
                 ])
                 .write();
@@ -453,15 +835,36 @@ jobs:
             body += `Total: ${summaryData.total}, Success: ${summaryData.success}, Failed: ${summaryData.failed}\n\n`;
             
             if (summaryData.details && summaryData.details.length > 0) {
-              // Create a markdown table
-              body += '| Repository | Status | Duration |\n';
-              body += '|------------|--------|----------|\n';
+              // Create a markdown table with enhanced status information
+              body += '| Repository | Status | Duration | Export | Import |\n';
+              body += '|------------|--------|----------|--------|--------|\n';
               
               summaryData.details.forEach(detail => {
                 // Use emoji for better visual status
-                const statusEmoji = detail[1] === 'success' ? '✅' : '❌';
-                body += `| ${detail[0]} | ${statusEmoji} | ${detail[2]} |\n`;
+                const statusEmoji = detail.status === 'success' ? '✅' : '❌';
+                const exportEmoji = detail.exportStatus === 'success' ? '✅' : detail.exportStatus === 'failed' ? '❌' : '❓';
+                const importEmoji = detail.importStatus === 'success' ? '✅' : detail.importStatus === 'failed' ? '❌' : '❓';
+                
+                body += `| ${detail.repo} | ${statusEmoji} | ${detail.duration} | ${exportEmoji} | ${importEmoji} |\n`;
               });
+              
+              // Add failure analysis if there are failures
+              const failedRepos = summaryData.details.filter(d => d.status !== 'success');
+              if (failedRepos.length > 0) {
+                body += '\n### Failed Repositories Analysis\n';
+                failedRepos.forEach(detail => {
+                  body += `- **${detail.repo}**: `;
+                  if (detail.exportStatus === 'failed') {
+                    body += 'Export failed';
+                  } else if (detail.importStatus === 'failed') {
+                    body += 'Import failed';
+                  } else {
+                    body += 'General failure';
+                  }
+                  body += ` (Duration: ${detail.duration})\n`;
+                });
+                body += '\nPlease check the workflow logs for detailed error information.\n';
+              }
               
               // Add note about deletion for dry-run
               if (migrationType === 'Dry-run' && summaryData.success > 0) {
