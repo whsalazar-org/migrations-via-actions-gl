@@ -4,6 +4,28 @@ This repository contains GitHub Actions workflows to migrate repositories from v
 
 For setup instructions, see the [Setup Guide](SETUP_GUIDE.md).
 
+## Configuration
+
+### Container Optimization
+For GitLab migrations, you can improve performance by using a custom container image with all prerequisites pre-installed:
+
+1. **Default Configuration**: The workflow automatically installs GitHub CLI, Go, and other prerequisites during execution
+2. **Optimized Configuration**: Use a custom container image by setting repository variables:
+   - `GL_EXPORTER_IMAGE`: Custom container image URL
+   - `DOCKER_REGISTRY_USERNAME`: Username for private registries (if needed)
+   - `DOCKER_REGISTRY_PASSWORD`: Password for private registries (secret, if needed)
+
+The optimized approach reduces migration time and improves reliability by avoiding repeated installations.
+
+### Error Handling & Monitoring
+The migration workflows include comprehensive error checking and reporting:
+
+- **Prerequisites Validation**: Verifies all required variables and secrets before starting
+- **Step-by-Step Error Tracking**: Monitors export and import phases separately
+- **Detailed Status Reporting**: Enhanced migration summary with failure analysis
+- **Automatic Cleanup**: Removes temporary files on failure
+- **Professional Logging**: Uses GitHub Actions annotations for clear error messages
+
 ## Repo Config
 <!--
 Paste repo setup configuration below.

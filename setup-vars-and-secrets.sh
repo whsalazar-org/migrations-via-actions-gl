@@ -3,6 +3,10 @@
 set -e
 
 # This script is used to create variables and secrets in a GitHub repository
+# It supports container image configuration for GitLab migrations:
+# - GL_EXPORTER_IMAGE: Custom container image URL (optional)
+# - DOCKER_REGISTRY_USERNAME: Username for private registries (optional)
+# - DOCKER_REGISTRY_PASSWORD: Password for private registries (optional, secret)
 usage() {
   echo "Usage: $0 -s <server or host> -r <repository>"
   echo

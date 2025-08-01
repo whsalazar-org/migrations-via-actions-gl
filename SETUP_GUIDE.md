@@ -13,7 +13,7 @@ There are several migration workflows that can be used to migrate repositories f
 | Issue Template Name | Workflow Name | Source | Target | Vars | Secrets | Notes |
 |---------------|---------------|--------|--------|-------|-------|-------|
 | GitLab to GitHub migration | `.github/workflows/migration-gitlab.yml` | GitLab Server | GitHub.com | SOURCE_ADMIN_USERNAME SOURCE_HOST TARGET_ORGANIZATION | SOURCE_ADMIN_TOKEN TARGET_ADMIN_TOKEN | |
-| GitLab to GitHub migration [GEI] | `.github/workflows/migration-gitlab-to-ghec-gei.yml` | GitLab | GitHub.com | TARGET_ORGANIZATION TARGET_HOST SOURCE_ADMIN_USERNAME SOURCE_HOST GITHUB_STORAGE AWS_REGION AZURE_STORAGE_ACCOUNT BLOB_STORAGE_CONTAINER | TARGET_ADMIN_TOKEN SOURCE_ADMIN_TOKEN AZURE_STORAGE_ACCESS_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY | |
+| GitLab to GitHub migration [GEI] | `.github/workflows/migration-gitlab-to-ghec-gei.yml` | GitLab | GitHub.com | TARGET_ORGANIZATION TARGET_HOST SOURCE_ADMIN_USERNAME SOURCE_HOST GITHUB_STORAGE AWS_REGION AZURE_STORAGE_ACCOUNT BLOB_STORAGE_CONTAINER GL_EXPORTER_IMAGE DOCKER_REGISTRY_USERNAME | TARGET_ADMIN_TOKEN SOURCE_ADMIN_TOKEN AZURE_STORAGE_ACCESS_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DOCKER_REGISTRY_PASSWORD | |
 
 > [!NOTE]
 > - \* When source is **GHES 3.7 and earlier** you need to define blob storage for GEI. To use Azure blob storage, define `AZURE_STORAGE_CONNECTION_STRING`. To use AWS blob storage, define `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_BUCKET_NAME`.
@@ -21,6 +21,7 @@ There are several migration workflows that can be used to migrate repositories f
 > - *** For GEI, you can set `INSTALL_PREREQS` to `false` to opt out of installing GEI and other prerequisites during the workflow run. If the variable is unset, it defaults to `true`.
 > - **** For GEI with BitBucket Server, `BITBUCKET_ARCHIVE_DOWNLOAD_HOST` is only needed it using BBS Data Center cluster or if using a load balancer. `BITBUCKET_SHARED_HOME` can be set if your BitBucket Server is not using the default shared home directory.
 > - For GEI with GitLab, `BLOB_STORAGE_CONTAINER` is used as the container name for Azure Storage or the bucket name for AWS S3.
+> - **Container Image Configuration**: For GitLab migrations, you can use a custom container image by setting `GL_EXPORTER_IMAGE` (the container image URL), `DOCKER_REGISTRY_USERNAME` (username for private registries), and `DOCKER_REGISTRY_PASSWORD` (password for private registries). If these are not set, the workflow will use a default container and install prerequisites during execution.
 > - Token requirements:
 >   - **`SOURCE_ADMIN_TOKEN`** must have the `repo` and `admin:org` scopes set (for GitHub-based sources)
 >   - **`TARGET_ADMIN_TOKEN`** must have the `admin:org`, `workflow` (if GEI), and `delete_repo` scopes set.
@@ -67,14 +68,31 @@ If necessary, update the self-hosted runner label in your workflow so that it pi
 
 Working through the `gl-exporter` ruby runtime [requirements](/tools/gl-exporter/docs/Requirements.md) can sometimes be tricky. It's possible to build and push the [Dockerfile](/tools/gl-exporter/Dockerfile) to the repository and run as a container job:
 
+#### Option 1: Default Container (Automatic Prerequisites Installation)
+If you don't specify container variables, the workflow will use a default container and automatically install GitHub CLI, Go, and other prerequisites during execution.
+
+#### Option 2: Custom Container Image
+You can use a custom container image that has all prerequisites pre-installed. This approach is faster and more reliable:
+
+1. Build your custom container image with GitLab exporter, GitHub CLI, Go, and gh-glx-migrator extension pre-installed
+2. Push the image to a container registry (can be private)
+3. Configure the following repository variables:
+   - `GL_EXPORTER_IMAGE`: Your custom container image URL (e.g., `ghcr.io/your-org/gl-exporter:latest`)
+   - `DOCKER_REGISTRY_USERNAME`: Username for accessing private registries (if needed)
+4. Configure the following repository secret:
+   - `DOCKER_REGISTRY_PASSWORD`: Password/token for accessing private registries (if needed)
+
+Example workflow configuration:
 ```yml
 jobs:
-  export:
-    name: Export
-    runs-on: ${{ inputs.runner }}
+  migrate:
+    name: Migrate GitLab Repository
+    runs-on: ${{ inputs.RUNNER }}
     container:
-      image: 'ghcr.io/${{ github.repository }}:latest'
+      image: ${{ vars.GL_EXPORTER_IMAGE }}
       credentials:
-         username: ${{ github.ref }}
-         password: ${{ secrets.GITHUB_TOKEN }}
+        username: ${{ vars.DOCKER_REGISTRY_USERNAME }}
+        password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
 ```
+
+When using a custom container with all prerequisites pre-installed, you can set the `INSTALL_PREREQS` input to `false` to skip the installation steps and improve performance.
