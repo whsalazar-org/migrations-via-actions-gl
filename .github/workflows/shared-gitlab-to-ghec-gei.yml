@@ -340,7 +340,7 @@ jobs:
       #    echo "::notice::Go environment configured successfully"
 
       - name: Write single repository to file
-        working-directory: ./workspace
+        working-directory: /workspace
         run: |
           echo "${{ matrix.repository.group }},${{ matrix.repository.repo }}" > single_repository.txt
 
@@ -363,7 +363,7 @@ jobs:
           GITLAB_USERNAME: ${{ env.GITLAB_USERNAME }}
           GITLAB_API_PRIVATE_TOKEN: ${{ env.GITLAB_PAT }}
           GITLAB_API_ENDPOINT: ${{ env.GITLAB_API_ENDPOINT }}
-        working-directory: ./workspace
+        working-directory: /workspace
         run: |
           set -e  # Exit immediately if any command fails
           
@@ -394,7 +394,7 @@ jobs:
           
           echo "::group::Running GitLab exporter"
           # Run the exporter directly with error handling
-          if ! gl_exporter --ssl-no-verify -f single_repository.txt -o ${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}; then
+          if ! gl_exporter --ssl-no-verify -f single_repository.txt -o /${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}; then
             echo "::error::GitLab export failed for repository ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
             echo "export_status=failed" >> $GITHUB_OUTPUT
             exit 1
@@ -492,7 +492,7 @@ jobs:
           
           echo "::group::Validating prerequisites"
           # Verify the archive file exists
-          ARCHIVE_PATH="${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          ARCHIVE_PATH="/${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
           echo "Looking for archive file: $ARCHIVE_PATH"
           
           if [ ! -f "$ARCHIVE_PATH" ]; then
