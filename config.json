@@ -77,7 +77,6 @@
             "bootstrap.yml",
             "migration-delete-repositories.yml",
             "shared-github-enterprise-cloud-import.yml",
-            "shared-gitlab-export.yml",
             "migration-prepare.yml"
         ],
         "tools": [
