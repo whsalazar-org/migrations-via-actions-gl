@@ -244,104 +244,106 @@ jobs:
       # Install prerequisites in container
       # NOTE: These installation steps can be removed if the custom container image
       # already has GitHub CLI and Go pre-installed and properly configured
-      - name: Install prerequisites
-        if: ${{ inputs.INSTALL_PREREQS }}
-        run: |
-          set -e  # Exit immediately if any command fails
-          
-          echo "::group::Updating package lists"
-          if ! apt-get update; then
-            echo "::error::Failed to update package lists"
-            exit 1
-          fi
-          echo "::endgroup::"
-          
-          echo "::group::Installing basic tools"
-          if ! apt-get install -y curl wget gnupg lsb-release software-properties-common; then
-            echo "::error::Failed to install basic tools"
-            exit 1
-          fi
-          echo "::endgroup::"
-          
-          echo "::group::Installing GitHub CLI"
-          # Install GitHub CLI (can be removed if pre-installed in container image)
-          if [ -z "$(command -v gh)" ]; then
-            echo "GitHub CLI not found, installing..."
-            if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg; then
-              echo "::error::Failed to download GitHub CLI keyring"
-              exit 1
-            fi
-            
-            if ! chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; then
-              echo "::error::Failed to set permissions on GitHub CLI keyring"
-              exit 1
-            fi
-            
-            if ! echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null; then
-              echo "::error::Failed to add GitHub CLI repository"
-              exit 1
-            fi
-            
-            if ! apt-get update; then
-              echo "::error::Failed to update package lists after adding GitHub CLI repository"
-              exit 1
-            fi
-            
-            if ! apt-get install -y gh; then
-              echo "::error::Failed to install GitHub CLI"
-              exit 1
-            fi
-            
-            echo "GitHub CLI installed successfully"
-          else
-            echo "GitHub CLI already installed: $(gh --version)"
-          fi
-          echo "::endgroup::"
-          
-          echo "::group::Installing development tools"
-          # Install other required packages including Go (can be removed if pre-installed in container image)
-          if ! apt-get install -y build-essential git cmake ca-certificates golang-go; then
-            echo "::error::Failed to install development tools (build-essential, git, cmake, ca-certificates, golang-go)"
-            exit 1
-          fi
-          echo "::endgroup::"
-          
-          echo "::notice::All prerequisites installed successfully"
+      #- name: Install prerequisites
+      #  if: ${{ inputs.INSTALL_PREREQS }}
+      #  run: |
+      #    set -e  # Exit immediately if any command fails
+      #    
+      #    echo "::group::Updating package lists"
+      #    if ! apt-get update; then
+      #      echo "::error::Failed to update package lists"
+      #      exit 1
+      #    fi
+      #    echo "::endgroup::"
+      #    
+      #    echo "::group::Installing basic tools"
+      #    if ! apt-get install -y curl wget gnupg lsb-release software-properties-common; then
+      #      echo "::error::Failed to install basic tools"
+      #      exit 1
+      #    fi
+      #    echo "::endgroup::"
+      #    
+      #    echo "::group::Installing GitHub CLI"
+      #    # Install GitHub CLI (can be removed if pre-installed in container image)
+      #    if [ -z "$(command -v gh)" ]; then
+      #      echo "GitHub CLI not found, installing..."
+      #      if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg; then
+      #        echo "::error::Failed to download GitHub CLI keyring"
+      #        exit 1
+      #      fi
+      #      
+      #      if ! chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; then
+      #        echo "::error::Failed to set permissions on GitHub CLI keyring"
+      #        exit 1
+      #      fi
+      #      
+      #      if ! echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null; then
+      #        echo "::error::Failed to add GitHub CLI repository"
+      #        exit 1
+      #      fi
+      #      
+      #      if ! apt-get update; then
+      #        echo "::error::Failed to update package lists after adding GitHub CLI repository"
+      #        exit 1
+      #      fi
+      #      
+      #      if ! apt-get install -y gh; then
+      #        echo "::error::Failed to install GitHub CLI"
+      #        exit 1
+      #      fi
+      #      
+      #      echo "GitHub CLI installed successfully"
+      #    else
+      #      echo "GitHub CLI already installed: $(gh --version)"
+      #    fi
+      #    echo "::endgroup::"
+      #    
+      #    echo "::group::Installing development tools"
+      #    # Install other required packages including Go (can be removed if pre-installed in container image)
+      #    if ! apt-get install -y build-essential git cmake ca-certificates golang-go; then
+      #      echo "::error::Failed to install development tools (build-essential, git, cmake, ca-certificates, golang-go)"
+      #      exit 1
+      #    fi
+      #    echo "::endgroup::"
+      #    
+      #    echo "::notice::All prerequisites installed successfully"
 
       # NOTE: This Go environment setup step can be removed if the custom container image
       # already has Go properly configured with correct GOPATH and PATH settings
-      - name: Setup Go environment
-        if: ${{ inputs.INSTALL_PREREQS }}
-        run: |
-          set -e  # Exit immediately if any command fails
-          
-          echo "::group::Verifying Go installation"
-          if ! go version; then
-            echo "::error::Go is not installed or not in PATH"
-            exit 1
-          fi
-          echo "::endgroup::"
-          
-          echo "::group::Setting up Go environment"
-          # Set Go environment variables
-          export GOPATH=/root/go
-          export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
-          
-          # Persist environment variables for subsequent steps
-          echo "GOPATH=/root/go" >> $GITHUB_ENV
-          echo "/usr/local/go/bin:/root/go/bin" >> $GITHUB_PATH
-          
-          # Verify environment setup
-          echo "Go version: $(go version)"
-          echo "GOPATH: $GOPATH"
-          echo "PATH: $PATH"
-          echo "::endgroup::"
-          
-          echo "::notice::Go environment configured successfully"
+      #- name: Setup Go environment
+      #  if: ${{ inputs.INSTALL_PREREQS }}
+      #  run: |
+      #    set -e  # Exit immediately if any command fails
+      #    
+      #    echo "::group::Verifying Go installation"
+      #    if ! go version; then
+      #      echo "::error::Go is not installed or not in PATH"
+      #      exit 1
+      #    fi
+      #    echo "::endgroup::"
+      #    
+      #    echo "::group::Setting up Go environment"
+      #    # Set Go environment variables
+      #    export GOPATH=/root/go
+      #    export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
+      #    
+      #    # Persist environment variables for subsequent steps
+      #    echo "GOPATH=/root/go" >> $GITHUB_ENV
+      #    echo "/usr/local/go/bin:/root/go/bin" >> $GITHUB_PATH
+      #    
+      #    # Verify environment setup
+      #    echo "Go version: $(go version)"
+      #    echo "GOPATH: $GOPATH"
+      #    echo "PATH: $PATH"
+      #    echo "::endgroup::"
+      #    
+      #    echo "::notice::Go environment configured successfully"
 
       - name: Write single repository to file
+        working-directory: ./workspace
         run: |
           echo "${{ matrix.repository.group }},${{ matrix.repository.repo }}" > single_repository.txt
+
 
       - name: Create lock flag based on migration type
         uses: actions/github-script@v7
@@ -361,7 +363,7 @@ jobs:
           GITLAB_USERNAME: ${{ env.GITLAB_USERNAME }}
           GITLAB_API_PRIVATE_TOKEN: ${{ env.GITLAB_PAT }}
           GITLAB_API_ENDPOINT: ${{ env.GITLAB_API_ENDPOINT }}
-        working-directory: ./tools/gl-exporter
+        working-directory: ./workspace
         run: |
           set -e  # Exit immediately if any command fails
           
@@ -392,7 +394,7 @@ jobs:
           
           echo "::group::Running GitLab exporter"
           # Run the exporter directly with error handling
-          if ! exe/gl_exporter --ssl-no-verify -f ../../single_repository.txt -o ../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}; then
+          if ! gl_exporter --ssl-no-verify -f single_repository.txt -o ${{ steps.set-archive-name.outputs.archive-name }}.tar.gz ${{ steps.lock-flag.outputs.result }}; then
             echo "::error::GitLab export failed for repository ${{ matrix.repository.group }}/${{ matrix.repository.repo }}"
             echo "export_status=failed" >> $GITHUB_OUTPUT
             exit 1
@@ -400,7 +402,7 @@ jobs:
           echo "::endgroup::"
           
           echo "::group::Verifying export archive"
-          ARCHIVE_PATH="../../${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
+          ARCHIVE_PATH="${{ steps.set-archive-name.outputs.archive-name }}.tar.gz"
           if [ ! -f "$ARCHIVE_PATH" ]; then
             echo "::error::Export archive was not created: $ARCHIVE_PATH"
             echo "export_status=failed" >> $GITHUB_OUTPUT
