@@ -12,7 +12,6 @@ There are several migration workflows that can be used to migrate repositories f
 
 | Issue Template Name | Workflow Name | Source | Target | Vars | Secrets | Notes |
 |---------------|---------------|--------|--------|-------|-------|-------|
-| GitLab to GitHub migration | `.github/workflows/migration-gitlab.yml` | GitLab Server | GitHub.com | SOURCE_ADMIN_USERNAME SOURCE_HOST TARGET_ORGANIZATION | SOURCE_ADMIN_TOKEN TARGET_ADMIN_TOKEN | |
 | GitLab to GitHub migration [GEI] | `.github/workflows/migration-gitlab-to-ghec-gei.yml` | GitLab | GitHub.com | TARGET_ORGANIZATION TARGET_HOST SOURCE_ADMIN_USERNAME SOURCE_HOST GITHUB_STORAGE AWS_REGION AZURE_STORAGE_ACCOUNT BLOB_STORAGE_CONTAINER GL_EXPORTER_IMAGE DOCKER_REGISTRY_USERNAME | TARGET_ADMIN_TOKEN SOURCE_ADMIN_TOKEN AZURE_STORAGE_ACCESS_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DOCKER_REGISTRY_PASSWORD | |
 
 > [!NOTE]
@@ -46,8 +45,7 @@ To learn how to use the script run:
 Verify that the [bootstrap actions](.github/workflows/bootstrap.yml) ran successfully as it creates the necessary issue labels. If not, create the following [issue labels](https://docs.github.com/en/issues/using-labels-and-milestones-to-track-work/managing-labels#creating-a-label):
 
 1. `migration` (for all)
-4. `gitlab` (for gitlab)
-10. `gei-gitlab` (for GitLab to GitHub.com with GEI)
+2. `gei-gitlab` (for GitLab to GitHub.com with GEI)
 
 ## SSH Key setup
 

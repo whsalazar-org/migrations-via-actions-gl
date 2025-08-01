@@ -15,7 +15,7 @@ jobs:
 
     if: github.event_name == 'issue_comment' &&
       (contains(github.event.issue.labels.*.name, 'github-enterprise-server') ||
-      contains(github.event.issue.labels.*.name, 'gitlab') ||
+      contains(github.event.issue.labels.*.name, 'gei-gitlab') ||
       contains(github.event.issue.labels.*.name, 'bitbucket')) &&
       startsWith(github.event.comment.body, '/delete-repositories')
 

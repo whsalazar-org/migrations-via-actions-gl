@@ -70,12 +70,11 @@
     },
     "gitlab-to-ghec-eci": {
         "issue_templates": [
-            "gitlab-migration.yml",
+            "gitlab-migration-gei.yml",
             "config.yml"
         ],
         "workflows": [
             "bootstrap.yml",
-            "migration-gitlab.yml",
             "migration-delete-repositories.yml",
             "shared-github-enterprise-cloud-import.yml",
             "shared-gitlab-export.yml",
